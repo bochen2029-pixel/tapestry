@@ -8,6 +8,8 @@ Working name. **Rung R0 of seven is built, gated and receipted** — the tape, t
 
 ---
 
+**Picking this up?** [`NEXT.md`](NEXT.md) is where the repo stands, what is blocked and why, and what to do next.
+
 ## The four laws
 
 1. **The tape is the truth.** One append-only, hash-chained log. Nothing is ever edited. Every durable structure is a fold over it: integer folds re-derive bit for bit; judged folds re-derive within a stated envelope.
