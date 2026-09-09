@@ -27,6 +27,30 @@
 
 namespace tapestry {
 
+// The one byte each of state, flags and verb, carried over from `osv_core.cuh`'s vocabulary, which
+// §12 keeps. `F_BLOCKED` in particular is preserved by name: a cell whose dependency is unmet must
+// hold, and acting on it is a lie.
+enum CState : uint8_t {
+    C_OPEN       = 0,   // outstanding, nothing decided this cycle
+    C_HELD       = 1,   // judged, deliberately not acted on — the hold is a record, never a silence
+    C_DISPATCHED = 2,   // handed to a worker, in flight
+    C_ESCALATED  = 3,   // handed to a named human with a brief
+    C_CLOSED     = 4    // discharged; leaves the cell table at the next compaction
+};
+enum CFlag : uint8_t {
+    F_WARRANT   = 1u << 0,  // irreversible: a human signs it. A boundary condition, never relaxed.
+    F_EXOGENOUS = 1u << 1,  // waiting on a counterparty we do not control
+    F_BLOCKED   = 1u << 2,  // a dependency is unmet
+    F_SHADOW    = 1u << 3,  // in the randomised shadow stratum: judged, never published
+    F_EXPLORE   = 1u << 4,  // exploration quota
+    F_CONTENT   = 1u << 5,  // discharging it requires words
+    F_DIRTY     = 1u << 6,  // touched since the last sweep
+    F_PINNED    = 1u << 7   // ingest says this is authoritative; the solver may not move it
+};
+enum Verb : uint8_t {
+    V_HOLD = 0, V_ACT = 1, V_WORK = 2, V_FETCH = 3, V_ESCALATE = 4
+};
+
 struct Cell {                     // 128 bytes, resident in HBM and in the transactor's fold
     uint64_t id;                  // blake2b-128 of (source ‖ 0x1f ‖ table ‖ 0x1f ‖ key), low 64 bits; 0 reserved
     uint64_t opened_ns;           // t_epoch_ns

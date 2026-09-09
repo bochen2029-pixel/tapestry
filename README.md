@@ -36,8 +36,9 @@ A normal store answers *what is true now*. An organization that delegates decisi
 | **R0.1** | the tape: the v0 wire form, the literal-bytes chain, 64 MiB segments with chained headers, position assignment, the monotone epoch stamp, group commit with a real `fsync`, head recovery, the lossless writer, the verifier, a deterministic generator | [`receipts/R0.1_TAPE-STORE_2026-09-08_OPUS5.md`](receipts/R0.1_TAPE-STORE_2026-09-08_OPUS5.md) |
 | **R0.2** | the transactor: the five-step write path, the idempotency reply cache, refusals in two classes with coalescing, derived reversibility, the ingest law, exposure caps as a fold, and TAPESTRY's own constraint expression language | [`receipts/R0.2_THE-TRANSACTOR-AND-THE-WRIT_2026-09-08_OPUS5.md`](receipts/R0.2_THE-TRANSACTOR-AND-THE-WRIT_2026-09-08_OPUS5.md) |
 | **R0.3** | the client wire (length-prefixed frames, four calls), the transactor as a process, a fault injector that can kill a process *inside* a write, and R0's three remaining gates | [`receipts/R0.3_THE-SOCKET-THE-INJECTOR-AND-THE-DURABILITY-GATE_2026-09-08_OPUS5.md`](receipts/R0.3_THE-SOCKET-THE-INJECTOR-AND-THE-DURABILITY-GATE_2026-09-08_OPUS5.md) |
+| **R1.1** | the field fold: the lattice in integers, a differential projection bit-identical to a cold recompute, a sweep that terminates on a relative tolerance, the deadline wheel and the baseline | [`receipts/R1.1_THE-FIELD-FOLD_2026-09-09_OPUS5.md`](receipts/R1.1_THE-FIELD-FOLD_2026-09-09_OPUS5.md) |
 
-Rung R0 is complete. **253 checks, 0 failures.** Every oracle carries a *lie arm*: the same check run against input with a planted defect, which must **fail**. A run is green only when both arms behave, so a check that has quietly become a tautology turns the suite red instead of staying quiet.
+Rung R0 is complete and R1 is under way. **303 checks, 0 failures.** Every oracle carries a *lie arm*: the same check run against input with a planted defect, which must **fail**. A run is green only when both arms behave, so a check that has quietly become a tautology turns the suite red instead of staying quiet.
 
 Some numbers from the receipts, all measured on one desktop (i9-9900K, Samsung 970 EVO Plus NVMe, MSVC 19.44, `/W4 /WX /fp:strict`):
 
@@ -105,6 +106,7 @@ The tape is JSON Lines, one entry per line, hashed over the literal on-disk byte
 src/core/     BLAKE2b-256, the chain hash, the lossless JSON writer, files that tell the truth about durability
 src/tape/     the wire form and its strict scanner, segments, positions, group commit, recovery, the verifier
 src/writ/     the constraint expression language and the class map's pins
+src/fold/     the field: the lattice, the differential projection, the sweep, the deadline wheel
 src/tx/       the 128-byte hot row, the cell table, and the one writer
 src/net/      length-prefixed frames and the one request grammar — the only sockets in the store
 src/tools/    tapectl, and tapestryd (the transactor as a process)
