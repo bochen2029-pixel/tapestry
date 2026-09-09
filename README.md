@@ -49,7 +49,7 @@ Some numbers from the receipts, all measured on one desktop (i9-9900K, Samsung 9
 - **1,000 hard kills** of the store by a client that outlives it, 26,701 acknowledged writes: **0 lost, 0 changed, 0 chain breaks** across 2,000 reopens, and **0 retries that produced a second entry**.
 - Of 666 writes the client sent and got no answer for, **445 landed anyway** — two thirds, which is what a process kill normally does — and **all 445 were deduplicated on retry**. An unacknowledged write is not a lost one, and the store is what has to know the difference.
 - **221 of those kills landed inside a `WriteFile`**, leaving a genuine torn row; recovery truncated every one. An earlier round of 200 *timing-based* kills hit that window zero times: a crash test that waits for the right moment measures the schedule, not the code.
-- **20,000 real orders** ingested from a public e-commerce wire and recomputed by an independent script in another language: **0 disagreements**. Swap the declared reducer from `sum` to `last` — the defect the falsifier names — and **1,970 cells go wrong**, an order worth R$198.00 recorded as R$99.00. Conservation still holds perfectly on that run, which is exactly why conservation is not enough.
+- **All 99,441 orders** of a real public e-commerce wire, ingested and then recomputed by an independent script in another language: **0 disagreements**. Swap the declared reducer from `sum` to `last` — the defect the falsifier names — and **1,970 of 20,000 sampled cells go wrong**, an order worth R$198.00 recorded as R$99.00. Conservation still holds perfectly on that run, which is exactly why conservation is not enough.
 
 ---
 
