@@ -549,6 +549,13 @@ struct VerifyReport {
     uint64_t segments = 0;
     uint64_t first_pos = 0;
     uint64_t last_pos = 0;
+    // Torn trailing bytes in the LAST segment are not a break: they are what a writer that died
+    // inside a write leaves behind, and open() truncates them, counts them, and records a `warn`
+    // row. In any earlier segment the same bytes ARE a break, because a segment that has been rolled
+    // past can no longer be the one that was being written. Keeping the two apart is the difference
+    // between "this tape ends mid-row" and "this tape is broken", and a harness that cannot tell
+    // them apart calls every crash corruption.
+    uint64_t torn_tail_bytes = 0;
     std::string head = GENESIS;
     std::vector<std::string> problems;
     bool ok() const { return breaks == 0; }
@@ -573,8 +580,12 @@ inline void verify_dir(const std::string& dir, VerifyReport* rep) {
         while (off < data.size()) {
             const size_t nl = data.find('\n', off);
             if (nl == std::string::npos) {
-                rep->problems.push_back(path + ": torn trailing bytes (" + std::to_string(data.size() - off) + ")");
-                ++rep->breaks; break;
+                const uint64_t n = (uint64_t)(data.size() - off);
+                const bool last_segment = (si + 1 == segs.size());
+                rep->problems.push_back(path + ": torn trailing bytes (" + std::to_string(n) + ")" +
+                                        (last_segment ? " — recoverable, open() truncates and warns" : ""));
+                if (last_segment) rep->torn_tail_bytes += n; else ++rep->breaks;
+                break;
             }
             const std::string line = data.substr(off, nl - off);
             off = nl + 1; ++line_no;

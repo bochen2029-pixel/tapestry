@@ -31,6 +31,14 @@ echo === compiling tapectl ===
 cl %CFLAGS% "%ROOT%\src\tools\tapectl.cpp" /Fe:"%BIN%\tapectl.exe"
 if errorlevel 1 (echo BUILD FAILED: tapectl & exit /b 1)
 
+echo === compiling tapestryd ===
+cl %CFLAGS% "%ROOT%\src\tools\tapestryd.cpp" /Fe:"%BIN%\tapestryd.exe" ws2_32.lib
+if errorlevel 1 (echo BUILD FAILED: tapestryd & exit /b 1)
+
+echo === compiling t_kill ===
+cl %CFLAGS% "%ROOT%\src\tests\t_kill.cpp" /Fe:"%BIN%\t_kill.exe" ws2_32.lib
+if errorlevel 1 (echo BUILD FAILED: t_kill & exit /b 1)
+
 echo === build ok ===
 if /I "%1"=="test" (
   echo === running oracles ===
@@ -38,5 +46,9 @@ if /I "%1"=="test" (
   if errorlevel 1 (echo ORACLES FAILED: t_tape & exit /b 1)
   "%BIN%\t_tx.exe"
   if errorlevel 1 (echo ORACLES FAILED: t_tx & exit /b 1)
+  REM The durability gate spawns and kills processes; 20 kills here, the full 1,000 on demand:
+  REM   bin\t_kill.exe --n 1000
+  "%BIN%\t_kill.exe" --n 20
+  if errorlevel 1 (echo ORACLES FAILED: t_kill & exit /b 1)
 )
 exit /b 0

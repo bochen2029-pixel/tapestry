@@ -148,6 +148,12 @@ inline json::Value fact_body(const Fact& f) {
 }
 inline json::Value tx_body(const WriteReq& r, const std::string& derived_rev) {
     json::Value b = json::Value::object();
+    // The idempotency key is ON THE TAPE. §4.2: "the client reply cache is part of the replicated
+    // state machine" — so it is a fold, not a side table, and a transactor that has just recovered
+    // from a kill can still tell a retry from a new write. Without these two fields the gate "a
+    // retried write applies once" holds only until the first crash, which is the case it is for.
+    b.set("client_id", json::Value::str(r.client_id));
+    b.set("request_id", json::Value::str(r.request_id));
     b.set("basis_pos", json::Value::u64(r.basis_pos));
     b.set("reversibility", json::Value::str(derived_rev));
     json::Value fs = json::Value::array();
@@ -177,11 +183,13 @@ inline bool read_fact(const std::string& s, size_t& i, Fact* f) {
     if (!eat_lit(s, i, "}}")) return false;
     return true;
 }
-inline bool read_tx_body(const std::string& body, uint64_t* basis_pos, std::string* rev,
-                         std::vector<Fact>* facts) {
+inline bool read_tx_body(const std::string& body, std::string* client_id, std::string* request_id,
+                         uint64_t* basis_pos, std::string* rev, std::vector<Fact>* facts) {
     using namespace detail;
     size_t i = 0;
-    if (!eat_lit(body, i, "{\"basis_pos\":") || !eat_u64(body, i, *basis_pos)) return false;
+    if (!eat_lit(body, i, "{\"client_id\":") || !eat_string(body, i, *client_id)) return false;
+    if (!eat_lit(body, i, ",\"request_id\":") || !eat_string(body, i, *request_id)) return false;
+    if (!eat_lit(body, i, ",\"basis_pos\":") || !eat_u64(body, i, *basis_pos)) return false;
     if (!eat_lit(body, i, ",\"reversibility\":") || !eat_string(body, i, *rev)) return false;
     if (!eat_lit(body, i, ",\"facts\":[")) return false;
     facts->clear();
@@ -221,6 +229,8 @@ public:
         tape_ = tape; map_ = map; cfg_ = cfg; dir_ = dir;
         cells_ = CellTable();
         cap_used_.clear();
+        replies_.clear();
+        applied_pos_ = 0; applied_any_ = false; redelivered_ = 0;
         std::string werr;
         const bool ok = for_each_row(dir_, [&](const ScannedRow& r) { apply_committed(r); return true; }, &werr);
         if (!ok) { if (err) *err = "rebuild: " + werr; return false; }
@@ -301,8 +311,12 @@ public:
         std::string cerr;
         if (!tape_->commit(&cerr)) { res.fault = fault::MALFORMED; ++health_.faults[res.fault]; return res; }
 
-        // Applied only after the flush returned: the fold never holds state the tape does not.
+        // Applied only after the flush returned: the fold never holds state the tape does not. And the
+        // applied position moves with it, so a subscriber replaying this same suffix later — after a
+        // reconnect, a leader change, or an effector's at-least-once redelivery — is a no-op rather
+        // than a second helping.
         apply_facts(req.facts, st.pos, st.t_epoch_ns);
+        applied_pos_ = st.pos; applied_any_ = true;
         last_stamp_ = st.t_epoch_ns;
         res.committed = true; res.pos = st.pos; res.h = st.h;
         ++health_.writes_committed;
@@ -324,6 +338,7 @@ public:
         }
         if (!tape_->commit(err)) return false;
         last_stamp_ = st.t_epoch_ns;
+        applied_pos_ = st.pos; applied_any_ = true;
         if (cadence_rule == "cap_period") cap_used_.clear();
         health_.committed_pos = tape_->committed_pos();
         return true;
@@ -476,11 +491,30 @@ private:
     }
 
     // Replay: the fold is a function of the committed tape and of nothing else.
+    //
+    // IDEMPOTENT BY POSITION. A delivery is at-least-once everywhere in this design — §4.9's effector,
+    // §4.8's subscribe, and a peer resuming after a leader change all re-read a suffix they may have
+    // already applied. A fold that adds a fact twice because the tape handed it over twice is not a
+    // fold, and an exposure cap is exactly the column where that shows up as money. So: nothing at or
+    // below the applied position is applied again. R0's gate, "a redelivered suffix does not
+    // double-count", and falsifier 2's second lie, "deliver one twice".
     void apply_committed(const ScannedRow& r) {
+        if (applied_any_ && r.hdr.pos <= applied_pos_) { ++redelivered_; return; }
+        applied_pos_ = r.hdr.pos;
+        applied_any_ = true;
         last_stamp_ = r.hdr.t_epoch_ns;
         if (r.hdr.k == kind::TX) {
-            uint64_t basis = 0; std::string rev; std::vector<Fact> facts;
-            if (read_tx_body(r.body, &basis, &rev, &facts)) apply_facts(facts, r.hdr.pos, r.hdr.t_epoch_ns);
+            std::string cid, rid; uint64_t basis = 0; std::string rev; std::vector<Fact> facts;
+            if (read_tx_body(r.body, &cid, &rid, &basis, &rev, &facts)) {
+                apply_facts(facts, r.hdr.pos, r.hdr.t_epoch_ns);
+                // The reply cache, rebuilt: a retry after a crash gets the original answer, not a
+                // second commit.
+                if (!cid.empty() || !rid.empty()) {
+                    WriteRes res;
+                    res.committed = true; res.pos = r.hdr.pos; res.h = r.h;
+                    replies_[cid + "\x1f" + rid] = res;
+                }
+            }
         } else if (r.hdr.k == kind::TICK) {
             std::string rule; uint64_t wheel = 0;
             if (read_tick_body(r.body, &rule, &wheel)) {
@@ -524,6 +558,7 @@ private:
         if (!tape_->stage(hd, b, opts, &st, &why)) { if (err) *err = why; return false; }
         last_refusal_pos_ = st.pos;
         last_stamp_ = st.t_epoch_ns;
+        applied_pos_ = st.pos; applied_any_ = true;
         ++health_.refusal_entries;
         return true;
     }
@@ -555,10 +590,23 @@ private:
     uint64_t wheel_pos_ = 0;
     uint64_t dup_noops_ = 0;
     uint64_t last_refusal_pos_ = 0;
+    uint64_t applied_pos_ = 0;
+    bool     applied_any_ = false;
+    uint64_t redelivered_ = 0;
     bool     leader_ = true;
 
 public:
     uint64_t duplicate_noops() const { return dup_noops_; }
+    uint64_t applied_pos()     const { return applied_pos_; }
+    uint64_t redelivered()     const { return redelivered_; }
+
+    // Feed a committed row into the fold from outside — the shape a subscriber or a peer uses, and
+    // the one the redelivery oracle drives.
+    void deliver(const ScannedRow& r) { apply_committed(r); }
+
+    // FOR THE LIE ARM ONLY. Rewinding the applied position turns this fold into one with no
+    // redelivery guard, which is the defect falsifier 2 plants. Nothing in the write path calls it.
+    void rewind_applied_for_test(uint64_t pos) { applied_pos_ = pos; applied_any_ = true; }
 };
 
 } // namespace tapestry

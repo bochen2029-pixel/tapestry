@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <atomic>
 #include <mutex>
@@ -44,6 +45,55 @@ namespace tapestry {
 
 inline std::string os_err_text(unsigned long e) {
     char b[64]; std::snprintf(b, sizeof(b), "os_error=%lu", e); return b;
+}
+
+// ---- the fault injector --------------------------------------------------------------------------
+// R0 owes one (§9). Two hundred real process kills in R0.1 never once landed inside `WriteFile` —
+// with a flush per batch the writer is almost always parked in `FlushFileBuffers` — so the torn-row
+// path, the one recovery path that matters most, was reachable only by hand-editing a file. A fault
+// injector makes it reachable ON PURPOSE and repeatably: write half a row and terminate the process
+// with no unwinding, which is what a crash mid-write actually looks like.
+//
+// Configured from the environment so a SPAWNED CHILD can be told what to do:
+//     TAPESTRY_FAULT=<what>:<n>[:<bytes>]
+//     write_fail   :n        the nth write returns an error
+//     sync_fail    :n        the nth sync returns an error
+//     die_before_sync:n      hard exit just before the nth sync — bytes written, nothing durable
+//     die_after_sync :n      hard exit just after the nth sync returns — the ack never reaches anyone
+//     torn_write   :n:bytes  the nth write writes only `bytes`, then hard exit
+struct FaultPolicy {
+    enum What { None, WriteFail, SyncFail, DieBeforeSync, DieAfterSync, TornWrite };
+    What     what = None;
+    uint64_t at_n = 0;
+    uint32_t bytes = 0;
+    uint64_t writes = 0, syncs = 0;
+};
+inline FaultPolicy g_faults;
+
+inline void die_now() {
+#if defined(_WIN32)
+    TerminateProcess(GetCurrentProcess(), 9);   // no atexit, no flush, no unwinding: a crash
+#else
+    _exit(9);
+#endif
+}
+
+inline void faults_from_env() {
+    const char* s = std::getenv("TAPESTRY_FAULT");
+    if (!s || !*s) return;
+    std::string v(s);
+    const size_t c1 = v.find(':');
+    if (c1 == std::string::npos) return;
+    const std::string what = v.substr(0, c1);
+    const size_t c2 = v.find(':', c1 + 1);
+    const std::string ns = v.substr(c1 + 1, (c2 == std::string::npos) ? std::string::npos : c2 - c1 - 1);
+    g_faults.at_n = std::strtoull(ns.c_str(), nullptr, 10);
+    if (c2 != std::string::npos) g_faults.bytes = (uint32_t)std::strtoul(v.c_str() + c2 + 1, nullptr, 10);
+    if      (what == "write_fail")      g_faults.what = FaultPolicy::WriteFail;
+    else if (what == "sync_fail")       g_faults.what = FaultPolicy::SyncFail;
+    else if (what == "die_before_sync") g_faults.what = FaultPolicy::DieBeforeSync;
+    else if (what == "die_after_sync")  g_faults.what = FaultPolicy::DieAfterSync;
+    else if (what == "torn_write")      g_faults.what = FaultPolicy::TornWrite;
 }
 
 // ---- a write handle ----------------------------------------------------------------------------
@@ -77,7 +127,7 @@ struct File {
 #endif
     }
 
-    bool write_all(const void* p, size_t n, std::string* err) {
+    bool write_raw(const void* p, size_t n, std::string* err) {
         const char* c = (const char*)p; size_t done = 0;
         while (done < n) {
 #if defined(_WIN32)
@@ -97,15 +147,43 @@ struct File {
         }
         return true;
     }
+
+    bool write_all(const void* p, size_t n, std::string* err) {
+        if (g_faults.what != FaultPolicy::None) {
+            ++g_faults.writes;
+            if (g_faults.writes == g_faults.at_n) {
+                if (g_faults.what == FaultPolicy::WriteFail) {
+                    if (err) *err = "write " + path + " injected_fault"; return false;
+                }
+                if (g_faults.what == FaultPolicy::TornWrite) {
+                    const size_t partial = (g_faults.bytes && g_faults.bytes < n) ? g_faults.bytes : (n / 2);
+                    std::string ignored;
+                    write_raw(p, partial, &ignored);      // half a row, on its way to the platter
+                    die_now();                            // and the process is gone, mid-write
+                }
+            }
+        }
+        return write_raw(p, n, err);
+    }
     bool write_all(const std::string& s, std::string* err) { return write_all(s.data(), s.size(), err); }
 
     // The real one. This is the call the group-commit batch is paid for.
     bool sync(std::string* err) {
+        if (g_faults.what != FaultPolicy::None) {
+            ++g_faults.syncs;
+            if (g_faults.syncs == g_faults.at_n) {
+                if (g_faults.what == FaultPolicy::SyncFail) {
+                    if (err) *err = "sync " + path + " injected_fault"; return false;
+                }
+                if (g_faults.what == FaultPolicy::DieBeforeSync) die_now();
+            }
+        }
 #if defined(_WIN32)
         if (!FlushFileBuffers(h)) { if (err) *err = "FlushFileBuffers " + path + " " + os_err_text(GetLastError()); return false; }
 #else
         if (::fsync(fd) != 0) { if (err) *err = "fsync " + path + " " + os_err_text((unsigned long)errno); return false; }
 #endif
+        if (g_faults.what == FaultPolicy::DieAfterSync && g_faults.syncs == g_faults.at_n) die_now();
         return true;
     }
 

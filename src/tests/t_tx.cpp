@@ -531,9 +531,10 @@ static void t_body_round_trip() {
     json::WriteOpts opts; opts.allow_f64 = false;
     check(json::write(tx_body(r, "irreversible"), out, opts, &why), "body.write", why);
 
-    uint64_t basis = 0; std::string rev; std::vector<Fact> back;
-    check(read_tx_body(out, &basis, &rev, &back), "body.read");
+    uint64_t basis = 0; std::string rev, cid, rid; std::vector<Fact> back;
+    check(read_tx_body(out, &cid, &rid, &basis, &rev, &back), "body.read");
     check(basis == 17 && rev == "irreversible" && back.size() == 2, "body.shape");
+    check(cid == "c" && rid == "r", "body.idempotency_key_is_on_the_tape", cid + "/" + rid);
     check(back[0].source == f.source && back[0].key == f.key && back[0].op == f.op, "body.strings_survive");
     check(back[0].source_pos == f.source_pos && back[0].cls == f.cls, "body.widths_survive");
     check(back[0].amount_minor == INT64_MIN && back[0].state == 255 && back[0].flags == 254, "body.extremes_survive");
@@ -544,8 +545,8 @@ static void t_body_round_trip() {
     std::string tampered = out;
     const size_t at = tampered.find("\"state\":255");
     if (at != std::string::npos) tampered[at + 9] = '1';
-    std::vector<Fact> back2; uint64_t b2 = 0; std::string rev2;
-    const bool read_ok = read_tx_body(tampered, &b2, &rev2, &back2);
+    std::vector<Fact> back2; uint64_t b2 = 0; std::string rev2, cid2, rid2;
+    const bool read_ok = read_tx_body(tampered, &cid2, &rid2, &b2, &rev2, &back2);
     check(!read_ok || back2[0].state != 255, "body.lie.a_changed_byte_changes_the_facts");
 }
 

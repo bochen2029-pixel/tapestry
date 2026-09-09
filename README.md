@@ -4,7 +4,7 @@
 
 The tape is the truth. A hold is a row. One writer. The writ is a constraint, and nothing learned disposes.
 
-Working name. Early rungs — R0.1 and R0.2 of seven are built and receipted; everything after is written down and not yet code.
+Working name. **Rung R0 of seven is built, gated and receipted** — the tape, the one writer, and the client wire; R1 through R6 are designed, reviewed, and not yet code.
 
 ---
 
@@ -35,15 +35,18 @@ A normal store answers *what is true now*. An organization that delegates decisi
 |---|---|---|
 | **R0.1** | the tape: the v0 wire form, the literal-bytes chain, 64 MiB segments with chained headers, position assignment, the monotone epoch stamp, group commit with a real `fsync`, head recovery, the lossless writer, the verifier, a deterministic generator | [`receipts/R0.1_TAPE-STORE_2026-09-08_OPUS5.md`](receipts/R0.1_TAPE-STORE_2026-09-08_OPUS5.md) |
 | **R0.2** | the transactor: the five-step write path, the idempotency reply cache, refusals in two classes with coalescing, derived reversibility, the ingest law, exposure caps as a fold, and TAPESTRY's own constraint expression language | [`receipts/R0.2_THE-TRANSACTOR-AND-THE-WRIT_2026-09-08_OPUS5.md`](receipts/R0.2_THE-TRANSACTOR-AND-THE-WRIT_2026-09-08_OPUS5.md) |
+| **R0.3** | the client wire (length-prefixed frames, four calls), the transactor as a process, a fault injector that can kill a process *inside* a write, and R0's three remaining gates | [`receipts/R0.3_THE-SOCKET-THE-INJECTOR-AND-THE-DURABILITY-GATE_2026-09-08_OPUS5.md`](receipts/R0.3_THE-SOCKET-THE-INJECTOR-AND-THE-DURABILITY-GATE_2026-09-08_OPUS5.md) |
 
-**204 checks, 0 failures.** Every oracle carries a *lie arm*: the same check run against input with a planted defect, which must **fail**. A run is green only when both arms behave, so a check that has quietly become a tautology turns the suite red instead of staying quiet.
+Rung R0 is complete. **253 checks, 0 failures.** Every oracle carries a *lie arm*: the same check run against input with a planted defect, which must **fail**. A run is green only when both arms behave, so a check that has quietly become a tautology turns the suite red instead of staying quiet.
 
 Some numbers from the receipts, all measured on one desktop (i9-9900K, Samsung 970 EVO Plus NVMe, MSVC 19.44, `/W4 /WX /fp:strict`):
 
 - Group commit: **p99 3.2 ms at 7,250 entries/s**, single-threaded. Unbatched has the same p50 — `FlushFileBuffers` is a fixed ~2 ms toll, not a per-byte cost — so the batch buys 15× throughput at no latency cost.
 - The same run with the flush removed is 27× faster and durable of nothing. That is what a writer that calls `fflush` durable is actually measuring.
 - Two cold generations of the same script are **byte-identical**: same digest, same head, across 8 segments and 5,008 rows.
-- **200 hard process kills** under load, across two arms: every reopen recovered, 1.87 M rows verified, 0 failures — after the defect in the next section was fixed.
+- **1,000 hard kills** of the store by a client that outlives it, 26,701 acknowledged writes: **0 lost, 0 changed, 0 chain breaks** across 2,000 reopens, and **0 retries that produced a second entry**.
+- Of 666 writes the client sent and got no answer for, **445 landed anyway** — two thirds, which is what a process kill normally does — and **all 445 were deduplicated on retry**. An unacknowledged write is not a lost one, and the store is what has to know the difference.
+- **221 of those kills landed inside a `WriteFile`**, leaving a genuine torn row; recovery truncated every one. An earlier round of 200 *timing-based* kills hit that window zero times: a crash test that waits for the right moment measures the schedule, not the code.
 
 ---
 
@@ -67,14 +70,22 @@ Windows, MSVC 2022. No dependencies — the hash, the writer, the expression lan
 build\build.cmd test
 ```
 
-Compiles two oracle binaries and `tapectl` into `bin\`, then runs 204 checks.
+Compiles the oracles, `tapectl` and `tapestryd` into `bin\`, then runs 253 checks including a 20-kill durability gate.
 
 ```
 bin\tapectl gen    --dir tape --entries 5000 --seg-bytes 262144 --batch 16
 bin\tapectl verify --dir tape
 bin\tapectl status --dir tape        what a reopen would find, without writing
 bin\tapectl bench  --dir tape --entries 20000 --batch 16
-powershell -File build\killtest.ps1 -Iterations 100
+bin\tapestryd      --dir tape --port 7070
+bin\t_kill.exe     --n 1000          the full durability gate
+```
+
+The store can also be told exactly where to die, which is how the torn-row recovery path gets tested at all:
+
+```
+set TAPESTRY_FAULT=torn_write:12:80     write 80 bytes of the 12th row, then terminate
+set TAPESTRY_FAULT=die_after_sync:5     die with the acknowledgement still in flight
 ```
 
 The tape is JSON Lines, one entry per line, hashed over the literal on-disk bytes:
@@ -95,7 +106,8 @@ src/core/     BLAKE2b-256, the chain hash, the lossless JSON writer, files that 
 src/tape/     the wire form and its strict scanner, segments, positions, group commit, recovery, the verifier
 src/writ/     the constraint expression language and the class map's pins
 src/tx/       the 128-byte hot row, the cell table, and the one writer
-src/tools/    tapectl
+src/net/      length-prefixed frames and the one request grammar — the only sockets in the store
+src/tools/    tapectl, and tapestryd (the transactor as a process)
 src/tests/    the oracles, each with its lie arm
 build/        build.cmd, the kill harness, the cross-check against the estate's own verifier
 receipts/     one dated receipt per rung — where a receipt and a document disagree, the receipt wins
