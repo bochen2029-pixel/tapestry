@@ -35,6 +35,10 @@ echo === compiling tapectl ===
 cl %CFLAGS% "%ROOT%\src\tools\tapectl.cpp" /Fe:"%BIN%\tapectl.exe"
 if errorlevel 1 (echo BUILD FAILED: tapectl & exit /b 1)
 
+echo === compiling t_grades ===
+cl %CFLAGS% "%ROOT%\src\tests\t_grades.cpp" /Fe:"%BIN%\t_grades.exe"
+if errorlevel 1 (echo BUILD FAILED: t_grades & exit /b 1)
+
 echo === compiling t_enrich ===
 cl %CFLAGS% "%ROOT%\src\tests\t_enrich.cpp" /Fe:"%BIN%\t_enrich.exe"
 if errorlevel 1 (echo BUILD FAILED: t_enrich & exit /b 1)
@@ -62,6 +66,8 @@ if /I "%1"=="test" (
   if errorlevel 1 (echo ORACLES FAILED: t_field & exit /b 1)
   "%BIN%\t_enrich.exe"
   if errorlevel 1 (echo ORACLES FAILED: t_enrich & exit /b 1)
+  "%BIN%\t_grades.exe"
+  if errorlevel 1 (echo ORACLES FAILED: t_grades & exit /b 1)
   REM The durability gate spawns and kills processes; 20 kills here, the full 1,000 on demand:
   REM   bin\t_kill.exe --n 1000
   "%BIN%\t_kill.exe" --n 20
