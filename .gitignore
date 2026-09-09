@@ -1,0 +1,30 @@
+# Build output and working tapes. Nothing here is truth: every byte is re-derivable by
+#   build\build.cmd test
+# and the receipts under receipts\ carry the numbers that were measured from them.
+bin/
+build/obj/
+/scratch/
+# NOT qc/scratch/ — those are the reviewers' probes and their outputs, which the QC reports cite as
+# evidence. Their compiled binaries are excluded by the patterns below; their sources stay.
+
+# Except for whole-file copies of OTHER projects that the reviewers took as working material:
+# fusord.cpp (chunked) and the osv_* engine headers belong to their own codebases, and MIT-licensing
+# them here would relicense those projects by accident. The QC reports quote them with line numbers
+# where the argument needs it, which is the evidence; the whole files are not ours to publish.
+qc/scratch/tape/chunk-*.md
+qc/scratch/tape/INDEX.md
+qc/scratch/tape/_manifest.json
+qc/scratch/conv/
+osv_*.cuh
+osv_*.h
+osv_core_test.cpp
+osv_dispatch_test.cpp
+qc/scratch/license/osv_dispatch_test
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.tmp
+# an ELF binary with no extension; the .cpp beside it is the evidence
+# (git has no trailing comments on a pattern line — the whole line is the pattern)
+qc/scratch/license/qc4_probe
