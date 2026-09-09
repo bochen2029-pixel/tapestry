@@ -37,8 +37,9 @@ A normal store answers *what is true now*. An organization that delegates decisi
 | **R0.2** | the transactor: the five-step write path, the idempotency reply cache, refusals in two classes with coalescing, derived reversibility, the ingest law, exposure caps as a fold, and TAPESTRY's own constraint expression language | [`receipts/R0.2_THE-TRANSACTOR-AND-THE-WRIT_2026-09-08_OPUS5.md`](receipts/R0.2_THE-TRANSACTOR-AND-THE-WRIT_2026-09-08_OPUS5.md) |
 | **R0.3** | the client wire (length-prefixed frames, four calls), the transactor as a process, a fault injector that can kill a process *inside* a write, and R0's three remaining gates | [`receipts/R0.3_THE-SOCKET-THE-INJECTOR-AND-THE-DURABILITY-GATE_2026-09-08_OPUS5.md`](receipts/R0.3_THE-SOCKET-THE-INJECTOR-AND-THE-DURABILITY-GATE_2026-09-08_OPUS5.md) |
 | **R1.1** | the field fold: the lattice in integers, a differential projection bit-identical to a cold recompute, a sweep that terminates on a relative tolerance, the deadline wheel and the baseline | [`receipts/R1.1_THE-FIELD-FOLD_2026-09-09_OPUS5.md`](receipts/R1.1_THE-FIELD-FOLD_2026-09-09_OPUS5.md) |
+| **R1.2** | enrichment: declared join paths, reducers with no default, back-fill, the completeness assertion — and *the ledger agrees with the world*, run against 20,000 real orders | [`receipts/R1.2_ENRICHMENT-AND-THE-OLIST-WIRE_2026-09-09_OPUS5.md`](receipts/R1.2_ENRICHMENT-AND-THE-OLIST-WIRE_2026-09-09_OPUS5.md) |
 
-Rung R0 is complete and R1 is under way. **303 checks, 0 failures.** Every oracle carries a *lie arm*: the same check run against input with a planted defect, which must **fail**. A run is green only when both arms behave, so a check that has quietly become a tautology turns the suite red instead of staying quiet.
+Rung R0 is complete and R1 is under way. **328 checks, 0 failures.** Every oracle carries a *lie arm*: the same check run against input with a planted defect, which must **fail**. A run is green only when both arms behave, so a check that has quietly become a tautology turns the suite red instead of staying quiet.
 
 Some numbers from the receipts, all measured on one desktop (i9-9900K, Samsung 970 EVO Plus NVMe, MSVC 19.44, `/W4 /WX /fp:strict`):
 
@@ -48,6 +49,7 @@ Some numbers from the receipts, all measured on one desktop (i9-9900K, Samsung 9
 - **1,000 hard kills** of the store by a client that outlives it, 26,701 acknowledged writes: **0 lost, 0 changed, 0 chain breaks** across 2,000 reopens, and **0 retries that produced a second entry**.
 - Of 666 writes the client sent and got no answer for, **445 landed anyway** — two thirds, which is what a process kill normally does — and **all 445 were deduplicated on retry**. An unacknowledged write is not a lost one, and the store is what has to know the difference.
 - **221 of those kills landed inside a `WriteFile`**, leaving a genuine torn row; recovery truncated every one. An earlier round of 200 *timing-based* kills hit that window zero times: a crash test that waits for the right moment measures the schedule, not the code.
+- **20,000 real orders** ingested from a public e-commerce wire and recomputed by an independent script in another language: **0 disagreements**. Swap the declared reducer from `sum` to `last` — the defect the falsifier names — and **1,970 cells go wrong**, an order worth R$198.00 recorded as R$99.00. Conservation still holds perfectly on that run, which is exactly why conservation is not enough.
 
 ---
 
