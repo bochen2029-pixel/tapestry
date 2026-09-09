@@ -39,8 +39,9 @@ A normal store answers *what is true now*. An organization that delegates decisi
 | **R1.1** | the field fold: the lattice in integers, a differential projection bit-identical to a cold recompute, a sweep that terminates on a relative tolerance, the deadline wheel and the baseline | [`receipts/R1.1_THE-FIELD-FOLD_2026-09-09_OPUS5.md`](receipts/R1.1_THE-FIELD-FOLD_2026-09-09_OPUS5.md) |
 | **R1.2** | enrichment: declared join paths, reducers with no default, back-fill, the completeness assertion — and *the ledger agrees with the world*, run against all 99,441 orders of a real wire | [`receipts/R1.2_ENRICHMENT-AND-THE-OLIST-WIRE_2026-09-09_OPUS5.md`](receipts/R1.2_ENRICHMENT-AND-THE-OLIST-WIRE_2026-09-09_OPUS5.md) |
 | **R1.3** | the grades fold: one graded decision per verb, five verdicts, sources tagged, per-verb horizons — and `n_eff` that is never pooled | [`receipts/R1.3_THE-GRADES-FOLD_2026-09-09_OPUS5.md`](receipts/R1.3_THE-GRADES-FOLD_2026-09-09_OPUS5.md) |
+| **R2.1** | the sweep and the projection as CUDA kernels, from one source — host and device bit-identical, which settles the open determinism claim | [`receipts/R2.1_HOST-AND-DEVICE-BIT-FOR-BIT_2026-09-09_OPUS5.md`](receipts/R2.1_HOST-AND-DEVICE-BIT-FOR-BIT_2026-09-09_OPUS5.md) |
 
-Rung R0 is complete and R1's folds are built. **363 checks, 0 failures.** Every oracle carries a *lie arm*: the same check run against input with a planted defect, which must **fail**. A run is green only when both arms behave, so a check that has quietly become a tautology turns the suite red instead of staying quiet.
+Rung R0 is complete, R1's folds are built, and R2's determinism gate is met. **370 checks, 0 failures.** Every oracle carries a *lie arm*: the same check run against input with a planted defect, which must **fail**. A run is green only when both arms behave, so a check that has quietly become a tautology turns the suite red instead of staying quiet.
 
 Some numbers from the receipts, all measured on one desktop (i9-9900K, Samsung 970 EVO Plus NVMe, MSVC 19.44, `/W4 /WX /fp:strict`):
 
@@ -50,6 +51,7 @@ Some numbers from the receipts, all measured on one desktop (i9-9900K, Samsung 9
 - **1,000 hard kills** of the store by a client that outlives it, 26,701 acknowledged writes: **0 lost, 0 changed, 0 chain breaks** across 2,000 reopens, and **0 retries that produced a second entry**.
 - Of 666 writes the client sent and got no answer for, **445 landed anyway** — two thirds, which is what a process kill normally does — and **all 445 were deduplicated on retry**. An unacknowledged write is not a lost one, and the store is what has to know the difference.
 - **221 of those kills landed inside a `WriteFile`**, leaving a genuine torn row; recovery truncated every one. An earlier round of 200 *timing-based* kills hit that window zero times: a crash test that waits for the right moment measures the schedule, not the code.
+- The lattice sweep and its projection, run on a CPU and on a GPU from **one source function**, are **bit-identical** — every value, every flag — across two compilers, two instruction sets, and 8×256 threads against one sequential loop. Not within an envelope: equal. That is what makes the field's arithmetic integer-only.
 - **All 99,441 orders** of a real public e-commerce wire, ingested and then recomputed by an independent script in another language: **0 disagreements**. Swap the declared reducer from `sum` to `last` — the defect the falsifier names — and **1,970 of 20,000 sampled cells go wrong**, an order worth R$198.00 recorded as R$99.00. Conservation still holds perfectly on that run, which is exactly why conservation is not enough.
 
 ---
@@ -74,7 +76,13 @@ Windows, MSVC 2022. No dependencies — the hash, the writer, the expression lan
 build\build.cmd test
 ```
 
-Compiles the oracles, `tapectl` and `tapestryd` into `bin\`, then runs 253 checks including a 20-kill durability gate.
+Compiles the oracles and the tools into `bin\`, then runs 363 checks including a 20-kill durability gate. The GPU gate is separate, because it needs a card:
+
+```
+build\build_gpu.cmd test
+```
+
+CUDA 13.1 and an sm_89 device. With no card it exits 2 with a message rather than failing — "no card here" is not the same finding as "the arithmetic diverged".
 
 ```
 bin\tapectl gen    --dir tape --entries 5000 --seg-bytes 262144 --batch 16

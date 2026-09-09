@@ -45,6 +45,7 @@
 #include <vector>
 #include <map>
 #include <unordered_map>
+#include "field_leaf.h"          // the arithmetic, shared verbatim with the kernels (R2)
 #include "../tx/cells.h"
 #include "../core/blake2b.h"
 #include "../core/bytes.h"
@@ -52,87 +53,23 @@
 namespace tapestry {
 namespace fold {
 
-// The lattice's numeric unit: one minor unit (a cent) times 2^16, so the relaxation has fractional
-// resolution while every stored quantity stays an exact integer.
-inline constexpr int      FIX_BITS = 16;
-inline constexpr int64_t  FIX      = (int64_t)1 << FIX_BITS;
+// FIX_BITS, FIX, add_checked, mul_checked, LatticeDims, cell_index, slot_of, Coeffs, LatticeView and
+// step_cell_at all live in field_leaf.h, which compiles unchanged under nvcc. Nothing below is
+// arithmetic the device also performs; it is the bookkeeping the host owns — the placement map, the
+// deadline wheel, the digests and the conservation law.
 
 inline const char* const E_OVERFLOW    = "field_overflow";
 inline const char* const E_DIMS        = "field_bad_dims";
 inline const char* const E_COEFFS      = "field_bad_coeffs";
 inline const char* const E_NOT_PLACED  = "field_cell_not_placed";
 
-inline bool add_checked(int64_t a, int64_t b, int64_t* out) {
-    if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) return false;
-    *out = a + b; return true;
-}
-inline bool mul_checked(int64_t a, int64_t b, int64_t* out) {
-    if (a > 0) {
-        if (b > 0)      { if (a > INT64_MAX / b) return false; }
-        else if (b < 0) { if (b < INT64_MIN / a) return false; }
-    } else if (a < 0) {
-        if (b > 0)      { if (a < INT64_MIN / b) return false; }
-        else if (b < 0) { if (b < INT64_MAX / a) return false; }
-    }
-    *out = a * b; return true;
-}
-
-// ---- dimensions and the projection's pure functions -------------------------------------------------
-struct LatticeDims {
-    int32_t  NSEG = 0, NCLS = 0, NSLOT = 0;
-    uint64_t slot_ns = 0;
-    int32_t  count() const { return NSEG * NCLS * NSLOT; }
-    bool ok() const { return NSEG > 0 && NCLS > 0 && NSLOT > 1 && slot_ns > 0; }
-};
-
-inline int32_t cell_index(const LatticeDims& d, int32_t seg, int32_t cls, int32_t slot) {
-    return (seg * d.NCLS + cls) * d.NSLOT + slot;
-}
-
-// A commitment's slot is where its deadline falls relative to now. Overdue is not negative time, it
-// is maximum pressure, so it lands in slot 0. No deadline lands in the far bucket.
-inline int32_t slot_of(const LatticeDims& d, uint64_t now_ns, uint64_t due_ns) {
-    if (due_ns == 0) return d.NSLOT - 1;
-    if (due_ns <= now_ns) return 0;
-    const uint64_t ahead = (due_ns - now_ns) / d.slot_ns;
-    return ahead >= (uint64_t)d.NSLOT ? d.NSLOT - 1 : (int32_t)ahead;
-}
-
+// Both of these are one line over the leaf, so the host and the kernels project identically.
 inline int32_t project_one(const LatticeDims& d, const Cell& c, uint64_t now_ns) {
-    const int32_t seg  = (int32_t)(c.seg % (uint32_t)d.NSEG);
-    const int32_t cls  = (int32_t)(c.cls % (uint32_t)d.NCLS);
-    return cell_index(d, seg, cls, slot_of(d, now_ns, c.due_ns));
+    return project_one_raw(d, c.seg, c.cls, c.due_ns, now_ns);
 }
-
-// A cell contributes while it is outstanding. Closed obligations are history; dispatched ones still
-// occupy the seat discharging them, so they still carry load.
-inline bool contributes(const Cell& c) {
-    return c.state == C_OPEN || c.state == C_HELD || c.state == C_DISPATCHED;
-}
-
-// ---- the relaxation coefficients --------------------------------------------------------------------
-// Dyadic rationals over one power-of-two denominator. The constraint is what makes the sweep exact:
-// with `den` a power of two and every numerator an integer, the step is integer arithmetic with a
-// single truncating division, and truncation is the same on every machine.
-struct Coeffs {
-    int64_t  den    = 256;   // D, a power of two
-    int64_t  omega  = 256;   // ω · D   (1.0)
-    int64_t  decay  = 256;   // decay·D (1.0)
-    int64_t  k_cls  = 64;    // 0.25·D
-    int64_t  k_slot = 64;    // 0.25·D
-    // Relative tolerance: the sweep stops when the largest move is under tol_num/tol_den of
-    // max(1, ‖dev‖∞). QC-2 measured the shipped ABSOLUTE tolerance parked at one ULP.
-    int64_t  tol_num = 1, tol_den = 100000;
-    uint32_t max_iters = 128;         // the ratified cap, recorded with every result
-    int32_t  baseline_shift = 6;      // the EMA time constant: a step of 1/2^6 toward pressure
-    bool ok() const {
-        if (den <= 0 || (den & (den - 1)) != 0) return false;     // a power of two
-        if (omega <= 0 || decay <= 0 || k_cls < 0 || k_slot < 0) return false;
-        if (tol_den <= 0 || tol_num < 0) return false;
-        if (max_iters == 0 || baseline_shift < 0 || baseline_shift > 40) return false;
-        return true;
-    }
-};
+inline bool contributes(const Cell& c) { return contributes_state(c.state); }
+static_assert(C_OPEN == 0 && C_HELD == 1 && C_DISPATCHED == 2,
+              "contributes_state encodes the outstanding states as <= 2");
 
 struct SweepResult {
     uint32_t iters = 0;
@@ -180,6 +117,7 @@ public:
     bool baseline_has_history() const { return ticks_ > 0; }
 
     int64_t load_at(int32_t i)     const { return load_[(size_t)i]; }
+    int64_t count_at(int32_t i)    const { return count_[(size_t)i]; }
     int64_t dev_at(int32_t i)      const { return dev_[(size_t)i]; }
     int64_t baseline_at(int32_t i) const { return baseline_[(size_t)i]; }
     int64_t pressure_at(int32_t i) const { return baseline_[(size_t)i] + dev_[(size_t)i]; }
@@ -187,6 +125,22 @@ public:
 
     void set_capacity(int32_t i, int64_t cap_fix) { capacity_[(size_t)i] = cap_fix; }
     void set_now(uint64_t now_ns) { now_ns_ = now_ns; }
+
+    // The raw view the leaves take, and the same one a kernel is handed after the arrays are copied
+    // to the device. Non-const because the sweep writes `dev` and `flags` through it.
+    LatticeView view() {
+        LatticeView v;
+        v.d = d_; v.c = c_;
+        v.load = load_.data(); v.capacity = capacity_.data();
+        v.baseline = baseline_.data(); v.dev = dev_.data(); v.flags = flags_.data();
+        return v;
+    }
+    // Raw access for the host-device harness: what goes to the card and what comes back.
+    std::vector<int64_t>& load_v()     { return load_; }
+    std::vector<int64_t>& capacity_v() { return capacity_; }
+    std::vector<int64_t>& baseline_v() { return baseline_; }
+    std::vector<int64_t>& dev_v()      { return dev_; }
+    std::vector<uint8_t>& flags_v()    { return flags_; }
 
     // ---- the differential projection -----------------------------------------------------------
     // Place, unplace and reproject are the only ways the lattice's load changes. Each one remembers
@@ -384,47 +338,10 @@ private:
     //
     // The diagonal is decay PLUS the incident couplings, not decay alone: dividing by decay is the
     // classic way to make an unrelaxed sweep diverge on the interior, and it looks right.
+    // One line, on purpose. The arithmetic is `step_cell_at` in field_leaf.h, which the kernels call
+    // too — so a host-device disagreement cannot come from two authors having written it twice.
     bool step_cell(int32_t seg, int32_t cls, int32_t slot, int64_t* moved) {
-        const int32_t i = cell_index(d_, seg, cls, slot);
-        *moved = 0;
-        if (flags_[(size_t)i] & F_WARRANT) return true;     // a boundary condition is never relaxed
-
-        const int64_t d0 = dev_[(size_t)i];
-        int64_t lapN = 0, diagN = c_.decay;
-
-        auto couple = [&](int32_t j, int64_t k) -> bool {
-            int64_t t = 0;
-            if (!mul_checked(k, dev_[(size_t)j] - d0, &t)) return false;
-            if (!add_checked(lapN, t, &lapN)) return false;
-            diagN += k;
-            return true;
-        };
-        if (cls > 0            && !couple(cell_index(d_, seg, cls - 1, slot), c_.k_cls))  return false;
-        if (cls + 1 < d_.NCLS  && !couple(cell_index(d_, seg, cls + 1, slot), c_.k_cls))  return false;
-        if (slot > 0           && !couple(cell_index(d_, seg, cls, slot - 1), c_.k_slot)) return false;
-        if (slot + 1 < d_.NSLOT&& !couple(cell_index(d_, seg, cls, slot + 1), c_.k_slot)) return false;
-
-        int64_t src = load_[(size_t)i] - capacity_[(size_t)i] - baseline_[(size_t)i];
-        int64_t rN = 0, t = 0;
-        if (!mul_checked(src, c_.den, &rN)) return false;
-        if (!add_checked(rN, lapN, &rN)) return false;
-        if (!mul_checked(c_.decay, d0, &t)) return false;
-        if (!add_checked(rN, -t, &rN)) return false;
-
-        int64_t num = 0, den = 0;
-        if (!mul_checked(c_.omega, rN, &num)) return false;
-        if (!mul_checked(c_.den, diagN, &den)) return false;
-        if (den == 0) return false;
-        const int64_t delta = num / den;                    // truncation toward zero, one rule
-        int64_t nd = 0;
-        if (!add_checked(d0, delta, &nd)) return false;
-        dev_[(size_t)i] = nd;
-
-        const int64_t m = delta < 0 ? -delta : delta;
-        *moved = m;
-        if (m > 0) flags_[(size_t)i] |= F_DIRTY;
-        else       flags_[(size_t)i] = (uint8_t)(flags_[(size_t)i] & ~F_DIRTY);
-        return true;
+        return step_cell_at(view(), seg, cls, slot, moved);
     }
 
     // ---- the deadline wheel ----------------------------------------------------------------------
